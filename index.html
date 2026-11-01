@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Global Cricket Admin</title>
+    <!-- MQTT for Real-Time Internet Sync -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #e2e8f0; display: flex; justify-content: center; padding: 20px; color: #1e293b; }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 650px; }
+        h2, h3 { text-align: center; margin-top: 0; color: #0f172a; }
+        .hidden { display: none !important; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 15px; }
+        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px; }
+        input, select, textarea { padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; width: 100%; box-sizing: border-box; font-size: 14px; font-family: inherit; }
+        textarea { height: 80px; resize: none; }
+        button { padding: 12px; font-weight: bold; cursor: pointer; border: none; border-radius: 6px; color: white; font-size: 14px; transition: 0.1s; }
+        button:active { transform: scale(0.97); }
+        .btn-blue { background: #3b82f6; } .btn-green { background: #10b981; } .btn-red { background: #ef4444; } .btn-gray { background: #64748b; }
+        .full-width { grid-column: 1 / -1; width: 100%; margin-top: 10px; }
+        .match-id-box { background: #fef08a; padding: 15px; border-radius: 8px; text-align: center; font-weight: bold; margin-bottom: 15px; font-size: 18px; border: 2px dashed #eab308; }
+        .score-display { text-align: center; font-size: 32px; font-weight: 800; margin: 15px 0; }
+        .player-stats { font-size: 14px; background: #f1f5f9; padding: 10px; border-radius: 8px; margin-bottom: 15px; }
+        .log-box { font-size: 12px; background: #f8fafc; padding: 10px; border-radius: 6px; height: 100px; overflow-y: auto; border: 1px solid #e2e8f0; margin-top: 10px;}
+        label { font-weight: bold; font-size: 13px; color: #475569; display: block; margin-bottom: 5px; }
+        .sync-status { text-align: center; font-size: 12px; font-weight: bold; color: #dc2626; margin-bottom: 10px; }
+        .sync-status.connected { color: #16a34a; }
+    </style>
+</head>
+<body>
+
+<div class="card" id="setupScreen">
+    <h2>Global Match Setup</h2>
+    <div class="sync-status" id="connStatus">Connecting to Global Server...</div>
+    
+    <div class="match-id-box">
+        Match ID: <span id="displayMatchId" style="font-size: 24px; color: #b45309;">XXXXX</span>
+        <div style="font-size: 12px; font-weight: normal; margin-top: 5px; color: #713f12;">Share this ID with the Viewer screen to connect over the internet.</div>
+    </div>
+
+    <div class="grid-3">
+        <div><label>Team 1 Name</label><input type="text" id="t1Name" value="IND"></div>
+        <div><label>Team 2 Name</label><input type="text" id="t2Name" value="AUS"></div>
+        <div><label>Total Overs</label><input type="number" id="totalOvers" value="20" min="1"></div>
+    </div>
+    
+    <div class="grid-2">
+        <div><label>Team 1 Squad (Comma separated)</label><textarea id="t1Squad">Rohit, Gill, Kohli, Iyer, Rahul</textarea></div>
+        <div><label>Team 2 Squad (Comma separated)</label><textarea id="t2Squad">Warner, Head, Marsh, Smith, Maxwell</textarea></div>
+    </div>
+
+    <div class="grid-2" style="margin-top: 15px; border-top: 1px solid #ccc; padding-top: 15px;">
+        <div><label>Toss Winner</label><select id="tossWinner"></select></div>
+        <div><label>Decision</label>
+            <select id="tossDecision">
+                <option value="BAT">Bat First</option>
+                <option value="BOWL">Bowl First</option>
+            </select>
+        </div>
+    </div>
+
+    <button class="btn-blue full-width" onclick="startMatch()">Start Live Match</button>
+</div>
+
+<!-- LIVE SCORING PHASE -->
+<div class="card hidden" id="matchScreen">
+    <div class="sync-status connected">● LIVE ON INTERNET (ID: <span id="activeMatchId"></span>)</div>
+    <h3 id="matchHeader">1st Innings</h3>
+    <div class="score-display" id="mainScore">0 / 0 (0.0)</div>
+    
+    <div class="player-stats">
+        <div class="grid-2">
+            <div id="statStriker">Striker: 0 (0)</div>
+            <div id="statNonStriker">Non-Striker: 0 (0)</div>
+            <div id="statBowler" class="full-width" style="border-top: 1px solid #ccc; padding-top: 5px; margin-top: 5px;">Bowler: 0-0 (0.0)</div>
+        </div>
+    </div>
+
+    <div class="grid-3">
+        <div><label>Striker</label><select id="striker" onchange="pushState()"></select></div>
+        <div><label>Non-Striker</label><select id="nonStriker" onchange="pushState()"></select></div>
+        <div><label>Bowler</label><select id="bowler" onchange="pushState()"></select></div>
+    </div>
+    <button class="btn-gray full-width" onclick="swapBatsmen()" style="margin-bottom: 15px;">🔄 Swap Strike</button>
+
+    <strong>Runs (To Striker)</strong>
+    <div class="grid-4" style="margin-top: 5px;">
+        <button class="btn-green" onclick="addBall(0)">0</button>
+        <button class="btn-green" onclick="addBall(1)">1</button>
+        <button class="btn-green" onclick="addBall(2)">2</button>
+        <button class="btn-green" onclick="addBall(3)">3</button>
+        <button class="btn-green" onclick="addBall(4)">4</button>
+        <button class="btn-green" onclick="addBall(6)">6</button>
+        <button class="btn-red" style="grid-column: span 2;" onclick="addWicket()">Wicket!</button>
+    </div>
+
+    <strong>Extras (To Team & Bowler)</strong>
+    <div class="grid-2" style="margin-top: 5px;">
+        <button class="btn-gray" onclick="addExtra('Wide')">Wide (+1)</button>
+        <button class="btn-gray" onclick="addExtra('No Ball')">No Ball (+1)</button>
+    </div>
+    
+    <div class="log-box" id="logBox"></div>
+</div>
+
+<script>
+    // --- INTERNET SYNC SETUP ---
+    const client = mqtt.connect('wss://broker.emqx.io:8084/mqtt');
+    const matchId = Math.floor(10000 + Math.random() * 90000).toString(); // 5 digit ID
+    
+    document.getElementById('displayMatchId').innerText = matchId;
+    document.getElementById('activeMatchId').innerText = matchId;
+
+    client.on('connect', () => {
+        document.getElementById('connStatus').innerText = "● Connected to Global Server";
+        document.getElementById('connStatus').classList.add('connected');
+    });
+
+    // --- GAME LOGIC ---
+    let state = { phase: 'setup' };
+    let t1, t2, sq1, sq2;
+
+    // Update Toss dropdowns instantly when typing team names
+    document.getElementById('t1Name').addEventListener('input', updateToss);
+    document.getElementById('t2Name').addEventListener('input', updateToss);
+    function updateToss() {
+        let n1 = document.getElementById('t1Name').value.toUpperCase();
+        let n2 = document.getElementById('t2Name').value.toUpperCase();
+        document.getElementById('tossWinner').innerHTML = `<option value="${n1}">${n1}</option><option value="${n2}">${n2}</option>`;
+    }
+    updateToss();
+
+    function initStats(squad) {
+        let pStats = {}; let bStats = {};
+        squad.forEach(p => {
+            pStats[p] = { r: 0, b: 0, fours: 0, sixes: 0 };
+            bStats[p] = { balls: 0, runs: 0, wickets: 0 };
+        });
+        return { pStats, bStats };
+    }
+
+    function startMatch() {
+        t1 = document.getElementById('t1Name').value.toUpperCase();
+        t2 = document.getElementById('t2Name').value.toUpperCase();
+        sq1 = document.getElementById('t1Squad').value.split(',').map(s => s.trim());
+        sq2 = document.getElementById('t2Squad').value.split(',').map(s => s.trim());
+        
+        let winner = document.getElementById('tossWinner').value;
+        let decision = document.getElementById('tossDecision').value;
+        let batTeam = (decision === 'BAT') ? winner : (winner === t1 ? t2 : t1);
+        let bowlTeam = (batTeam === t1) ? t2 : t1;
+
+        let batSquad = batTeam === t1 ? sq1 : sq2;
+        let bowlSquad = batTeam === t1 ? sq2 : sq1;
+
+        let s1 = initStats(batSquad);
+        let s2 = initStats(bowlSquad);
+
+        state = {
+            phase: 'live', innings: 1, target: 0, format: parseInt(document.getElementById('totalOvers').value),
+            teamBat: batTeam, teamBowl: bowlTeam, batSquad: batSquad, bowlSquad: bowlSquad,
+            batStats: s1.pStats, bowlStats: s2.bStats, // Individual tracking
+            striker: batSquad[0], nonStriker: batSquad[1], bowler: bowlSquad[bowlSquad.length-1],
+            runs: 0, wickets: 0, balls: 0, thisOver: [], commentary: []
+        };
+
+        populateDropdowns();
+        document.getElementById('setupScreen').classList.add('hidden');
+        document.getElementById('matchScreen').classList.remove('hidden');
+        updateUI();
+    }
+
+    function populateDropdowns() {
+        document.getElementById('striker').innerHTML = state.batSquad.map(p => `<option value="${p}">${p}</option>`).join('');
+        document.getElementById('nonStriker').innerHTML = state.batSquad.map(p => `<option value="${p}" ${p===state.batSquad[1]?'selected':''}>${p}</option>`).join('');
+        document.getElementById('bowler').innerHTML = state.bowlSquad.map(p => `<option value="${p}" ${p===state.bowlSquad[state.bowlSquad.length-1]?'selected':''}>${p}</option>`).join('');
+    }
+
+    function readInputs() {
+        state.striker = document.getElementById('striker').value;
+        state.nonStriker = document.getElementById('nonStriker').value;
+        state.bowler = document.getElementById('bowler').value;
+    }
+
+    function pushState() {
+        if(state.phase === 'live' || state.phase === 'finished') readInputs();
+        
+        // PUBLISH TO INTERNET
+        if (client.connected) {
+            client.publish(`cricket_global_${matchId}`, JSON.stringify(state), { retain: true });
+        }
+    }
+
+    function formatOvers(balls) {
+        return Math.floor(balls/6) + "." + (balls%6);
+    }
+
+    function updateUI() {
+        if (state.phase !== 'live' && state.phase !== 'finished') return;
+        
+        document.getElementById('striker').value = state.striker;
+        document.getElementById('nonStriker').value = state.nonStriker;
+        document.getElementById('bowler').value = state.bowler;
+        
+        document.getElementById('mainScore').innerText = `${state.teamBat} ${state.runs} / ${state.wickets} (${formatOvers(state.balls)})`;
+        document.getElementById('matchHeader').innerText = state.phase === 'finished' ? "Match Over" : `Innings ${state.innings}`;
+        
+        // Update Individual Stats UI
+        let st = state.batStats[state.striker] || {r:0, b:0};
+        let nst = state.batStats[state.nonStriker] || {r:0, b:0};
+        let bw = state.bowlStats[state.bowler] || {wickets:0, runs:0, balls:0};
+        
+        document.getElementById('statStriker').innerHTML = `<strong>${state.striker}*</strong>: ${st.r} (${st.b})`;
+        document.getElementById('statNonStriker').innerHTML = `<strong>${state.nonStriker}</strong>: ${nst.r} (${nst.b})`;
+        document.getElementById('statBowler').innerHTML = `<strong>${state.bowler}</strong>: ${bw.wickets}-${bw.runs} (${formatOvers(bw.balls)})`;
+
+        document.getElementById('logBox').innerHTML = state.commentary.map(c => `<div>${c}</div>`).join('');
+        pushState();
+    }
+
+    function addBall(runs) {
+        if (state.phase === 'finished') return;
+        readInputs();
+        
+        // Update Team
+        state.runs += runs; state.balls++; state.thisOver.push(runs);
+        
+        // Update Batsman
+        if(!state.batStats[state.striker]) state.batStats[state.striker] = {r:0, b:0};
+        state.batStats[state.striker].r += runs;
+        state.batStats[state.striker].b += 1;
+        
+        // Update Bowler
+        if(!state.bowlStats[state.bowler]) state.bowlStats[state.bowler] = {wickets:0, runs:0, balls:0};
+        state.bowlStats[state.bowler].runs += runs;
+        state.bowlStats[state.bowler].balls += 1;
+
+        state.commentary.unshift(`🏏 ${formatOvers(state.balls-1)} | ${state.bowler} to ${state.striker}: ${runs} runs`);
+        
+        if (runs === 1 || runs === 3) swapBatsmen(true);
+        checkEnd();
+        
+        if (state.balls % 6 === 0 && state.phase !== 'finished') {
+            state.thisOver = []; swapBatsmen(true);
+            alert("End of Over! Select new bowler.");
+        }
+        updateUI();
+    }
+
+    function addExtra(type) {
+        if (state.phase === 'finished') return;
+        readInputs();
+        state.runs += 1;
+        
+        // Extras count against bowler runs, but NOT batsman balls/runs (keeping it standard simple)
+        if(!state.bowlStats[state.bowler]) state.bowlStats[state.bowler] = {wickets:0, runs:0, balls:0};
+        state.bowlStats[state.bowler].runs += 1;
+
+        state.commentary.unshift(`🏏 ${state.bowler}: ${type} (+1 team run)`);
+        checkEnd(); updateUI();
+    }
+
+    function addWicket() {
+        if (state.phase === 'finished') return;
+        readInputs();
+        state.thisOver.push('W');
+        state.wickets++; state.balls++;
+        
+        // Update Batsman ball count
+        if(!state.batStats[state.striker]) state.batStats[state.striker] = {r:0, b:0};
+        state.batStats[state.striker].b += 1;
+        
+        // Update Bowler wickets & balls
+        if(!state.bowlStats[state.bowler]) state.bowlStats[state.bowler] = {wickets:0, runs:0, balls:0};
+        state.bowlStats[state.bowler].wickets += 1;
+        state.bowlStats[state.bowler].balls += 1;
+
+        state.commentary.unshift(`🔴 OUT! ${state.striker} is gone.`);
+        checkEnd();
+        if(state.phase !== 'finished') alert("Wicket! Select next batsman for Striker.");
+        updateUI();
+    }
+
+    function swapBatsmen(skipPush = false) {
+        let temp = state.striker; state.striker = state.nonStriker; state.nonStriker = temp;
+        if(!skipPush) updateUI();
+    }
+
+    function checkEnd() {
+        if (state.innings === 2 && state.runs >= state.target) {
+            state.phase = 'finished'; state.commentary.unshift(`🏆 ${state.teamBat} WON THE MATCH!`); return;
+        }
+        if (state.wickets >= 10 || state.balls >= state.format * 6) {
+            if (state.innings === 1) {
+                state.target = state.runs + 1; state.innings = 2;
+                alert(`Innings Break! Target is ${state.target}`);
+                
+                let tempT = state.teamBat; state.teamBat = state.teamBowl; state.teamBowl = tempT;
+                let tempSq = state.batSquad; state.batSquad = state.bowlSquad; state.bowlSquad = tempSq;
+                let tempSt = state.batStats; state.batStats = state.bowlStats; state.bowlStats = tempSt; // Swap stats tracking
+                
+                state.runs = 0; state.wickets = 0; state.balls = 0; state.thisOver = [];
+                state.striker = state.batSquad[0]; state.nonStriker = state.batSquad[1]; state.bowler = state.bowlSquad[state.bowlSquad.length-1];
+                populateDropdowns();
+            } else {
+                state.phase = 'finished';
+                if (state.runs >= state.target) state.commentary.unshift(`🏆 ${state.teamBat} WON!`);
+                else if (state.runs === state.target - 1) state.commentary.unshift(`🤝 MATCH TIED!`);
+                else state.commentary.unshift(`🏆 ${state.teamBowl} WON!`);
+            }
+        }
+    }
+</script>
+</body>
+</html>
